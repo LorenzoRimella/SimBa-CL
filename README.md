@@ -1,2 +1,3 @@
-# SimBa-CL
-Simulation Based Composite Likelihood
+# SimBa-CL: Simulation Based Composite Likelihood
+
+Exact inference for high-dimensional hidden Markov models has a computational cost that is exponential in the dimension, making it unfeasible for even small models. For this reason factorial structures can be exploited in the model to design cheap local algorithms. However, even this last resort might fail when the dependence across time time steps is dense, keeping the cost exponential. We propose to see the likelihood of high-dimensional hidden Markov models as a composite marginal likelihood, where each marginal is computed via Monte Carlo approximation. The overall procedure relies on simulations from the models that allow us to decouple the dependence and so exploit the factorial structures in the model. The resulting algorithm is at most quadratic in the dimension and show significant improvements compared to baselines in terms of computational cost and inference.
