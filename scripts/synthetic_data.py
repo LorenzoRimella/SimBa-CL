@@ -62,7 +62,7 @@ def SEIR_transition(input_kernel, parameters_kernel, x_tm1):
 
     N = tf.cast(tf.shape(W)[0], dtype = tf.float32)
 
-    rate_SE   = tf.expand_dims(tf.expand_dims(1-tf.exp(-lambda__n*((c_tm1[...,1]/N)+epsilon)), axis =-1), axis =-1)
+    rate_SE   = tf.expand_dims(tf.expand_dims(1-tf.exp(-lambda__n*((c_tm1[...,2]/N)+epsilon)), axis =-1), axis =-1)
     rate_EI   = tf.expand_dims(tf.expand_dims(1 - tf.exp(-rho), axis = -1), axis = -1)*tf.ones(tf.shape(rate_SE))
     rate_IR   = tf.expand_dims(tf.expand_dims(1-tf.exp(-gamma__n), axis =-1), axis =-1)*tf.ones(tf.shape(rate_SE))
 
