@@ -1,5 +1,5 @@
-from distutils import log
-from email import iterators
+# from distutils import log
+# from email import iterators
 import numpy as np
 from synthetic_data import *
 
@@ -67,62 +67,149 @@ def categ_sampling(probabilities, seed_cat):
     
     return tfp.distributions.OneHotCategorical( probs = probabilities, dtype=tf.float32).sample(seed = seed_cat)
 
+def relaxed_categ_sampling(probabilities, tau, seed_cat):
+    
+    return tf.cast(tfp.distributions.RelaxedOneHotCategorical(temperature = tau,  probs = probabilities).sample(seed = seed_cat), dtype=tf.float32)
+
 class simulation_likelihood():
         
-    def __init__(self, parallel_simulations, N, input_0, input_kernel, initial_distribution, transition_kernel, emission_distribution):
+    def __init__(self, parallel_simulations, N, input_0, input_kernel, initial_distribution, transition_kernel, emission_distribution, 
+                 sampling = categ_sampling):
 
         self.model = compartmental_model(N, input_0, input_kernel, initial_distribution, transition_kernel)
         self.emission = emission_distribution
         self.parallel_simulations = parallel_simulations
+        self.sampling = sampling
 
 
-def run_simba_while(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_simba_while):
+# def run_simba_while(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_simba_while):
     
-        T = tf.shape(y)[0]
+#         T = tf.shape(y)[0]
 
-        seed_simba_while_split = tfp.random.split_seed( seed_simba_while, n=(T+1), salt='run_simba_while')
+#         seed_simba_while_split = tfp.random.split_seed( seed_simba_while, n=(T+1), salt='run_simba_while')
 
-        def cond(input, t):
+#         def cond(input, t):
 
-            return t<T
+#             return t<T
 
-        def body(input, t):
+#         def body(input, t):
 
-            filtering_tm1, x_tm1_sim, log_likelihood = input
+#             filtering_tm1, x_tm1_sim, log_likelihood = input
 
-            transition_matrix_tm1 = simulation_likelihood_model.model.transition_kernel(simulation_likelihood_model.model.input_kernel, parameters_kernel, x_tm1_sim)
-            prob_t = tf.einsum("...ni,...nik->...nk", x_tm1_sim, transition_matrix_tm1)
+#             transition_matrix_tm1 = simulation_likelihood_model.model.transition_kernel(simulation_likelihood_model.model.input_kernel, parameters_kernel, x_tm1_sim)
+#             prob_t = tf.einsum("...ni,...nik->...nk", x_tm1_sim, transition_matrix_tm1)
 
-            x_t_sim = categ_sampling(prob_t, seed_simba_while_split[t])
+#             x_t_sim = simulation_likelihood_model.sampling(prob_t, seed_simba_while_split[t])
 
-            # prediction on the filtering using the feedback
-            filtering_t_tm1 = prediction(filtering_tm1, transition_matrix_tm1)
+#             # prediction on the filtering using the feedback
+#             filtering_t_tm1 = prediction(filtering_tm1, transition_matrix_tm1)
 
-            # update as usual
-            y_t = y[t,...]
-            emission_t = simulation_likelihood_model.emission(parameters_emission, y_t)
-            likelihood_increment_t_tm1, filtering_t = update(filtering_t_tm1, emission_t)
+#             # update as usual
+#             y_t = y[t,...]
+#             emission_t = simulation_likelihood_model.emission(parameters_emission, y_t)
+#             likelihood_increment_t_tm1, filtering_t = update(filtering_t_tm1, emission_t)
 
-            return (filtering_t, x_t_sim, log_likelihood + tf.math.log(likelihood_increment_t_tm1)), t+1
+#             return (filtering_t, x_t_sim, log_likelihood + tf.math.log(likelihood_increment_t_tm1)), t+1
 
-        probs_0 = simulation_likelihood_model.model.initial_distribution(simulation_likelihood_model.model.input_0, parameters_0)
-        filtering_0 = tf.expand_dims(probs_0, axis = 0)*tf.ones(tf.concat(([simulation_likelihood_model.parallel_simulations], tf.shape(probs_0)), axis =0))
+#         probs_0 = simulation_likelihood_model.model.initial_distribution(simulation_likelihood_model.model.input_0, parameters_0)
+#         filtering_0 = tf.expand_dims(probs_0, axis = 0)*tf.ones(tf.concat(([simulation_likelihood_model.parallel_simulations], tf.shape(probs_0)), axis =0))
 
-        x_0_sim = categ_sampling(filtering_0, seed_simba_while_split[0])
+#         x_0_sim = simulation_likelihood_model.sampling(filtering_0, seed_simba_while_split[0])
 
-        initializer = (filtering_0, x_0_sim, tf.zeros(tf.shape(x_0_sim)[:-1]))
+#         initializer = (filtering_0, x_0_sim, tf.zeros(tf.shape(x_0_sim)[:-1]))
 
-        # Compute the function value
-        output = tf.while_loop(cond, body, loop_vars = (initializer, 1))
+#         # Compute the function value
+#         output = tf.while_loop(cond, body, loop_vars = (initializer, 1))
 
-        log_likelihood_individuals = output[0][2]
+#         log_likelihood_individuals = output[0][2]
         
-        max_log_likelihood_individuals = tf.reduce_mean(log_likelihood_individuals, axis = 0, keepdims = True) 
-        log_likelihood = tf.math.log(tf.reduce_mean(tf.exp(log_likelihood_individuals - max_log_likelihood_individuals), axis =0)) + tf.reduce_mean(log_likelihood_individuals, axis = 0) 
+#         max_log_likelihood_individuals = tf.reduce_mean(log_likelihood_individuals, axis = 0, keepdims = True) 
+#         log_likelihood = tf.math.log(tf.reduce_mean(tf.exp(log_likelihood_individuals - max_log_likelihood_individuals), axis =0)) + tf.reduce_mean(log_likelihood_individuals, axis = 0) 
 
-        target = log_likelihood
+#         target = log_likelihood
 
-        return target
+#         return target
+
+@tf.function(jit_compile=True)
+def run_simba_full(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_simba):
+    
+    T = tf.shape(y)[0]
+
+    seed_simba_split = tfp.random.split_seed( seed_simba, n=(T+1), salt='run_simba')
+
+    def step_func(input, t):
+        filtering_tm1, x_tm1_sim, log_likelihood = input
+
+        transition_matrix_tm1 = simulation_likelihood_model.model.transition_kernel(simulation_likelihood_model.model.input_kernel, parameters_kernel, x_tm1_sim)
+        prob_t = tf.einsum("...ni,...nik->...nk", x_tm1_sim, transition_matrix_tm1)
+
+        x_t_sim = simulation_likelihood_model.sampling(prob_t, seed_simba_split[t])
+
+        filtering_t_tm1 = prediction(filtering_tm1, transition_matrix_tm1)
+
+        y_t = y[t,...]
+        emission_t = simulation_likelihood_model.emission(parameters_emission, y_t)
+        likelihood_increment_t_tm1, filtering_t = update(filtering_t_tm1, emission_t)
+
+        return (filtering_t, x_t_sim, tf.math.log(likelihood_increment_t_tm1))
+
+    probs_0 = simulation_likelihood_model.model.initial_distribution(simulation_likelihood_model.model.input_0, parameters_0)
+    filtering_0 = tf.expand_dims(probs_0, axis=0) * tf.ones(tf.concat(([simulation_likelihood_model.parallel_simulations], tf.shape(probs_0)), axis=0))
+    x_0_sim = simulation_likelihood_model.sampling(filtering_0, seed_simba_split[0])
+    initializer = (filtering_0, x_0_sim, tf.zeros(tf.shape(x_0_sim)[:-1]))
+
+    sequence = tf.range(1, T)
+
+    # Perform the computation using tf.scan
+    outputs = tf.scan(step_func, sequence, initializer=initializer)
+
+    log_likelihood_individuals = tf.reduce_sum(outputs[2], axis =0)
+    max_log_likelihood_individuals = tf.reduce_mean(log_likelihood_individuals, axis=0, keepdims=True)
+    log_likelihood = tf.math.log(tf.reduce_mean(tf.exp(log_likelihood_individuals - max_log_likelihood_individuals), axis=0)) + tf.reduce_mean(log_likelihood_individuals, axis=0)
+
+    target = log_likelihood
+
+    return outputs[0], target
+
+@tf.function(jit_compile=True)
+def run_simba_full_filter(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_simba):
+    
+    T = tf.shape(y)[0]
+
+    seed_simba_split = tfp.random.split_seed( seed_simba, n=(T+1), salt='run_simba')
+
+    def step_func(input, t):
+        filtering_tm1, x_tm1_sim, log_likelihood = input
+
+        transition_matrix_tm1 = simulation_likelihood_model.model.transition_kernel(simulation_likelihood_model.model.input_kernel, parameters_kernel, x_tm1_sim)
+
+        filtering_t_tm1 = prediction(filtering_tm1, transition_matrix_tm1)
+
+        y_t = y[t,...]
+        emission_t = simulation_likelihood_model.emission(parameters_emission, y_t)
+        likelihood_increment_t_tm1, filtering_t = update(filtering_t_tm1, emission_t)
+        
+        x_t_sim = simulation_likelihood_model.sampling(filtering_t, seed_simba_split[t])
+
+        return (filtering_t, x_t_sim, tf.math.log(likelihood_increment_t_tm1))
+
+    probs_0 = simulation_likelihood_model.model.initial_distribution(simulation_likelihood_model.model.input_0, parameters_0)
+    filtering_0 = tf.expand_dims(probs_0, axis=0) * tf.ones(tf.concat(([simulation_likelihood_model.parallel_simulations], tf.shape(probs_0)), axis=0))
+    x_0_sim = simulation_likelihood_model.sampling(filtering_0, seed_simba_split[0])
+    initializer = (filtering_0, x_0_sim, tf.zeros(tf.shape(x_0_sim)[:-1]))
+
+    sequence = tf.range(1, T)
+
+    # Perform the computation using tf.scan
+    outputs = tf.scan(step_func, sequence, initializer=initializer)
+
+    log_likelihood_individuals = tf.reduce_sum(outputs[2], axis =0)
+    max_log_likelihood_individuals = tf.reduce_mean(log_likelihood_individuals, axis=0, keepdims=True)
+    log_likelihood = tf.math.log(tf.reduce_mean(tf.exp(log_likelihood_individuals - max_log_likelihood_individuals), axis=0)) + tf.reduce_mean(log_likelihood_individuals, axis=0)
+
+    target = log_likelihood
+
+    return outputs[0], target
 
 def run_simba(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_simba):
     
@@ -136,7 +223,7 @@ def run_simba(simulation_likelihood_model, parameters_0, parameters_kernel, para
         transition_matrix_tm1 = simulation_likelihood_model.model.transition_kernel(simulation_likelihood_model.model.input_kernel, parameters_kernel, x_tm1_sim)
         prob_t = tf.einsum("...ni,...nik->...nk", x_tm1_sim, transition_matrix_tm1)
 
-        x_t_sim = categ_sampling(prob_t, seed_simba_split[t])
+        x_t_sim = simulation_likelihood_model.sampling(prob_t, seed_simba_split[t])
 
         filtering_t_tm1 = prediction(filtering_tm1, transition_matrix_tm1)
 
@@ -148,7 +235,7 @@ def run_simba(simulation_likelihood_model, parameters_0, parameters_kernel, para
 
     probs_0 = simulation_likelihood_model.model.initial_distribution(simulation_likelihood_model.model.input_0, parameters_0)
     filtering_0 = tf.expand_dims(probs_0, axis=0) * tf.ones(tf.concat(([simulation_likelihood_model.parallel_simulations], tf.shape(probs_0)), axis=0))
-    x_0_sim = categ_sampling(filtering_0, seed_simba_split[0])
+    x_0_sim = simulation_likelihood_model.sampling(filtering_0, seed_simba_split[0])
     initializer = (filtering_0, x_0_sim, tf.zeros(tf.shape(x_0_sim)[:-1]))
 
     sequence = tf.range(1, T)
@@ -163,6 +250,13 @@ def run_simba(simulation_likelihood_model, parameters_0, parameters_kernel, para
     target = log_likelihood
 
     return target
+
+@tf.function(jit_compile=True)
+def simba_compiled(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_loss):
+
+    log_likelihood_individuals = run_simba(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_loss)
+
+    return log_likelihood_individuals
 
 @tf.function
 def simba_loss(simulation_likelihood_model, parameters_0, parameters_kernel, parameters_emission, y, seed_loss):
@@ -316,3 +410,84 @@ def individual_gradients_sample(simulation_likelihood_model, gradient_var, param
     individuals_gradients_ = tf.scan(body, tf.range(1, iterations), initializer = initialize)
 
     return individuals_gradients_
+
+# if __name__ == "__main__":
+    
+# 	import numpy as np
+# 	import tensorflow as tf
+# 	import tensorflow_probability as tfp
+
+# 	from tensorflow.keras import backend as K
+
+# 	import sys
+# 	sys.path.append('scripts/')
+# 	from simulation_based_likelihood import *
+# 	from synthetic_data import *
+# 	from simba_gradient_univariate import *
+
+# 	covariates_n = 2
+
+# 	M = 2
+# 	N = 300
+
+# 	T = 100
+
+# 	W_tensor = tf.convert_to_tensor(np.load("data/optimization/covariates.npy"), dtype = tf.float32)[:N,...]
+
+# 	input_0      = tuple([W_tensor])
+# 	input_kernel = tuple([W_tensor])
+
+# 	model = compartmental_model(N, input_0, input_kernel, SIS_initial, SIS_transition)
+
+# 	initial_infection_rate = 0.01
+# 	beta_0      = tf.convert_to_tensor( [-np.log((1/initial_infection_rate)-1), +0], dtype = tf.float32 )
+# 	beta_lambda = tf.convert_to_tensor( [-1,           +2],      dtype = tf.float32 )  
+# 	beta_gamma  = tf.convert_to_tensor( [-1,           -1],      dtype = tf.float32 )  
+# 	epsilon     = tf.convert_to_tensor( [0.001],                  dtype = tf.float32 )  
+
+# 	parameters_0 = tuple([beta_0])
+# 	parameters_kernel = beta_lambda, beta_gamma, epsilon
+
+# 	q_0      = tf.convert_to_tensor([0.0, 0.0], dtype = tf.float32)   
+# 	q_static = tf.convert_to_tensor([0.6, 0.4], dtype = tf.float32)
+
+# 	q_0_expanded      = tf.expand_dims(tf.expand_dims(q_0, axis = 0), axis = 0)
+# 	q_static_expanded = tf.expand_dims(tf.expand_dims(q_static, axis = 0), axis = 0)
+
+# 	q_dynamic = tf.concat((q_0_expanded*tf.ones((1, N, M)), q_static_expanded*tf.ones((T, N, M))), axis =0)
+
+# 	parameters_emission = tuple([q_static])
+
+# 	parallel_simulations = 100
+
+# 	optimization_steps = 200
+# 	lr_rate = 0.1
+# 	optimizer = tf.keras.optimizers.Adam(learning_rate = lr_rate)
+
+# 	tf.random.set_seed((N+T))
+# 	np.random.seed((N+T))
+
+# 	seed_gen_optim_experiment = tfp.random.split_seed( (N+T), n=2, salt='optimization_SGD_N1000_T100')
+
+# 	x, y = sim(model, parameters_0, parameters_kernel, q_dynamic, T, seed_gen_optim_experiment[1][0])
+
+# 	simulation_likelihood_model = simulation_likelihood(parallel_simulations, N, input_0, input_kernel, 
+# 							SIS_initial_grad, SIS_transition_grad, SIS_emission_grad,
+# 							sampling = lambda probabilities, seed_cat: relaxed_categ_sampling(probabilities = probabilities, seed_cat = seed_cat, tau=0.5))
+
+# 	initial_lambda = tf.Variable(tf.convert_to_tensor(np.random.uniform(-3, 3, 2), dtype = tf.float32))
+
+# 	seed_init_cond_optim = tfp.random.split_seed( seed_gen_optim_experiment[0][0], n= optimization_steps+1, salt='optimization_SGD_N1000_T100_optim_steps')
+
+# 	for epoch in range(optimization_steps):
+# 		print("Epoch ", epoch)
+# 		print("Parameters ", initial_lambda.numpy())
+
+# 		seed_simba_loss, seed_optimization = tfp.random.split_seed( seed_init_cond_optim[epoch][0], n= 2, salt='optimization_SGD_N1000_T100_epoch')
+
+# 		parameters_kernel_optim = initial_lambda, beta_gamma, epsilon
+
+# 		gradient = simba_loss_grad(simulation_likelihood_model, initial_lambda, parameters_0, parameters_kernel_optim, parameters_emission, y, seed_optimization[0])
+
+# 		# Apply gradients to update the parameters_var
+# 		optimizer.apply_gradients(zip([gradient], [initial_lambda]))
